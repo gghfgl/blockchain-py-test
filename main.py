@@ -10,13 +10,17 @@ from urllib.parse import urlparse
 class Blockchain:
     def __init__(self):
         self.chain = []
+        self.transactions = []  # NEW
         self.create_block(proof=1, previous_hash='0')
+        self.nodes = set()  # NEW
 
     def create_block(self, proof, previous_hash):
         block = {'index': len(self.chain) + 1,
                  'timestamp': str(datetime.datetime.now()),
                  'proof': proof,
-                 'previous_hash': previous_hash}
+                 'previous_hash': previous_hash,
+                 'transactions': self.transactions}
+        self.transactions = []  # NEW
         self.chain.append(block)
         return block
 
@@ -54,11 +58,45 @@ class Blockchain:
             block_index += 1
         return True
 
+    # NEW
+    def add_transcation(self, sender, receiver, amount):
+        self.transactions.append({
+            'sender': sender,
+            'receiver': receiver,
+            'amount': amount})
+        previous_block = self.get_previous_block()
+        return previous_block['index'] + 1
+
+    # NEW
+    def add_node(self, address):
+        parsed_url = urlparse(address)
+        self.nodes.add(parsed_url.netloc)
+
+    # NEW
+    def replace_chain(self):
+        network = self.nodes
+        longest_chain = None
+        max_length = len(self.chain)
+        for node in network:
+            response = requests.get(f'http://{node}/get_chain')
+            if response.status_code == 200:
+                length = response.json()['length']
+                chain = response.json()['chain']
+                if length > max_length and self.is_chain_valid(chain):
+                    max_length = length
+                    longest_chain = chain
+        if longest_chain:
+            self.chain = longest_chain
+            return True
+        return False
+
 
 # =====================================================================================================
 
 
 app = Flask(__name__)
+
+node_address = str(uuid4()).replace('-', '')
 
 blockchain = Blockchain()
 
@@ -72,12 +110,14 @@ def mine_block():
     previous_proof = previous_block['proof']
     proof = blockchain.proof_of_work(previous_proof)
     previous_hash = blockchain.hash(previous_block)
+    blockchain.add_transcation(sender=node_address, receiver='TestReceiver', amount=1)  # NEW
     block = blockchain.create_block(proof, previous_hash)
     response = {'message': "block successfully mined",
                 'index': block['index'],
                 'timestamp': block['timestamp'],
                 'proof': block['proof'],
-                'previous_hash': block['previous_hash']}
+                'previous_hash': block['previous_hash'],
+                'transactions': block['transactions']}  # NEW
     return jsonify(response), 200
 
 
@@ -92,6 +132,46 @@ def get_chain():
 def is_valid():
     response = {'is_valid': blockchain.is_chain_valid(blockchain.chain)}
     return jsonify(response), 200
+
+
+# NEW
+@app.route("/add_transaction", methods=['POST'])
+def add_transaction():
+    payload = request.get_json()
+    transaction_keys = ['sender', 'receiver', 'amount']
+    if not all(key in payload for key in transaction_keys):
+        return 'Some elements of the transaction are missing', 400
+    index = blockchain.add_transcation(payload['sender'], payload['receiver'], payload['amount'])
+    response = {'message': f'This transaction will be added to Block {index}'}
+    return jsonify(response), 201
+
+
+# NEW
+@app.route("/connect_node", methods=['POST'])
+def connect_node():
+    payload = request.get_json()
+    nodes = payload.get('nodes')
+    if nodes is None:
+        return 'No Node', 400
+    for node in nodes:
+        blockchain.add_node(node)
+    response = {'message': 'All the nodes are now connected, containing the following nodes',
+                'total_nodes': list(blockchain.nodes)}
+    return jsonify(response), 201
+
+
+# NEW
+@app.route("/replace_chain", methods=['GET'])
+def replace_chain():
+    is_chain_replaces = blockchain.replace_chain()
+    if is_chain_replaces:
+        response = {'message': 'Node had different chain and it got replaced',
+                    'new_chain': blockchain.chain}
+    else:
+        response = {'message': 'All good the chain is the largest one',
+                    'actual_chain': blockchain.chain}
+    return jsonify(response), 200
+
 
 # =====================================================================================================
 
